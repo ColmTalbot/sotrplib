@@ -234,89 +234,21 @@ def scipy_2d_gaussian_fit(
     preamble = "sources.fitting.scipy_2d_gaussian_fit."
     fit_method = "2d_gaussian"
     fit_sources = []
-    for i in tqdm(
-        range(len(source_catalog)),
+    for source in tqdm(
+        source_catalog,
         desc="Cutting thumbnails and fitting sources w 2D Gaussian",
     ):
-        source = source_catalog[i]
-        source_name = source.source_id
-        map_res = input_map.map_resolution
-        pix = input_map.flux.sky2pix(
-            [source.dec.to(u.rad).value, source.ra.to(u.rad).value]
-        )
-        size_pix = thumbnail_half_width / map_res
-        ## setup default MeasuredSource
-        forced_source = MeasuredSource(
-            ra=source.ra, dec=source.dec, source_id=source.source_id, flux=source.flux
-        )
-        forced_source.fit_method = fit_method
-        fit = GaussianFitParameters()
-        fit.failed = True
-
-        if (
-            pix[0] + size_pix > input_map.flux.shape[0]
-            or pix[1] + size_pix > input_map.flux.shape[1]
-            or pix[0] - size_pix < 0
-            or pix[1] - size_pix < 0
-        ):
-            fit.failure_reason = "source_outside_map_bounds"
-            log.warning(
-                f"{preamble}source_outside_map_bounds",
-                source=source_name,
-                thumb_size_pix=size_pix.value,
-            )
-            forced_source.fit_params = fit.model_dump()
-            fit_sources.append(forced_source)
-            continue
-
-        try:
-            forced_source.extract_thumbnail(
-                input_map,
-                thumb_width=thumbnail_half_width,
-                reproject_thumb=reproject_thumb,
-            )
-        except Exception as e:
-            log.error(
-                f"{preamble}extract_thumbnail_failed", source=source_name, error=e
-            )
-            forced_source.fit_failure_reason = "extract_thumbnail_failed"
-            fit_sources.append(forced_source)
-            continue
-
-        if np.any(np.isnan(forced_source.thumbnail)):
-            log.warning(f"{preamble}flux_thumb_has_nan", source=source_name)
-            forced_source.fit_failure_reason = "flux_thumb_has_nan"
-            fit_sources.append(forced_source)
-            continue
-
-        fitter = Gaussian2DFitter(
-            forced_source.thumbnail,
-            forced_source.thumbnail_res,
-            forced_source.thumbnail_unit,
-            thumbnail_center=(0 * u.deg, 0 * u.deg)
-            if reproject_thumb
-            else (source.ra, source.dec),
-            fwhm_guess=fwhm,
-            force_center=forced_source.flux < flux_lim_fit_centroid
-            if forced_source.flux is not None
-            else False,
+        forced_source = individual_scipy_2d_gaussian_fit(
+            input_map=input_map,
+            source=source,
+            fit_method=fit_method,
+            flux_lim_fit_centroid=flux_lim_fit_centroid,
+            thumbnail_half_width=thumbnail_half_width,
+            fwhm=fwhm,
+            reproject_thumb=reproject_thumb,
             log=log,
+            preamble=preamble,
         )
-
-        fitter.initialize_model()
-        fit = fitter.fit()
-        log.debug(f"{preamble}gauss_fit", source=source_name, fit=fit)
-
-        forced_source.fit_failed = False
-        forced_source.flux = fit.amplitude
-        forced_source.err_flux = fit.amplitude_err
-        forced_source.offset_ra = fit.ra_offset
-        forced_source.offset_dec = fit.dec_offset
-        forced_source.fwhm_ra = fit.fwhm_ra
-        forced_source.fwhm_dec = fit.fwhm_dec
-        forced_source.err_fwhm_ra = fit.fwhm_ra_err
-        forced_source.err_fwhm_dec = fit.fwhm_dec_err
-        forced_source.fit_params = fit.model_dump()
         fit_sources.append(forced_source)
 
     n_successful = 0
@@ -325,6 +257,95 @@ def scipy_2d_gaussian_fit(
             n_successful += 1
     log.info(f"{preamble}fits_complete", n_sources=len(fit_sources), n_fit=n_successful)
     return fit_sources
+
+
+def individual_scipy_2d_gaussian_fit(
+    input_map: ProcessableMap,
+    source: RegisteredSource,
+    fit_method: str = "2d_gaussian",
+    flux_lim_fit_centroid: u.Quantity = u.Quantity(0.3, "Jy"),
+    thumbnail_half_width: u.Quantity = u.Quantity(0.25, "deg"),
+    fwhm: u.Quantity = u.Quantity(2.2, "arcmin"),
+    reproject_thumb: bool = False,
+    log: FilteringBoundLogger | None = None,
+    preamble: str = "sources.fitting.scipy_2d_gaussian_fit.",
+):
+    source_name = source.source_id
+    map_res = input_map.map_resolution
+    pix = input_map.flux.sky2pix(
+        [source.dec.to(u.rad).value, source.ra.to(u.rad).value]
+    )
+    size_pix = thumbnail_half_width / map_res
+    ## setup default MeasuredSource
+    forced_source = MeasuredSource(
+        ra=source.ra, dec=source.dec, source_id=source.source_id, flux=source.flux
+    )
+    forced_source.fit_method = fit_method
+    fit = GaussianFitParameters()
+    fit.failed = True
+
+    if (
+        pix[0] + size_pix > input_map.flux.shape[0]
+        or pix[1] + size_pix > input_map.flux.shape[1]
+        or pix[0] - size_pix < 0
+        or pix[1] - size_pix < 0
+    ):
+        fit.failure_reason = "source_outside_map_bounds"
+        log.warning(
+            f"{preamble}source_outside_map_bounds",
+            source=source_name,
+            thumb_size_pix=size_pix.value,
+        )
+        forced_source.fit_params = fit.model_dump()
+        return forced_source
+
+    try:
+        forced_source.extract_thumbnail(
+            input_map,
+            thumb_width=thumbnail_half_width,
+            reproject_thumb=reproject_thumb,
+        )
+    except Exception as e:
+        log.error(
+            f"{preamble}extract_thumbnail_failed", source=source_name, error=e
+        )
+        forced_source.fit_failure_reason = "extract_thumbnail_failed"
+        return forced_source
+
+    if np.any(np.isnan(forced_source.thumbnail)):
+        log.warning(f"{preamble}flux_thumb_has_nan", source=source_name)
+        forced_source.fit_failure_reason = "flux_thumb_has_nan"
+        return forced_source
+
+    fitter = Gaussian2DFitter(
+        forced_source.thumbnail,
+        forced_source.thumbnail_res,
+        forced_source.thumbnail_unit,
+        thumbnail_center=(0 * u.deg, 0 * u.deg)
+        if reproject_thumb
+        else (source.ra, source.dec),
+        fwhm_guess=fwhm,
+        force_center=forced_source.flux < flux_lim_fit_centroid
+        if forced_source.flux is not None
+        else False,
+        log=log,
+    )
+
+    fitter.initialize_model()
+    fit = fitter.fit()
+    log.debug(f"{preamble}gauss_fit", source=source_name, fit=fit)
+
+    forced_source.fit_failed = False
+    forced_source.flux = fit.amplitude
+    forced_source.err_flux = fit.amplitude_err
+    forced_source.offset_ra = fit.ra_offset
+    forced_source.offset_dec = fit.dec_offset
+    forced_source.fwhm_ra = fit.fwhm_ra
+    forced_source.fwhm_dec = fit.fwhm_dec
+    forced_source.err_fwhm_ra = fit.fwhm_ra_err
+    forced_source.err_fwhm_dec = fit.fwhm_dec_err
+    forced_source.fit_params = fit.model_dump()
+    return forced_source
 
 
 def fit_2d_gaussian(
