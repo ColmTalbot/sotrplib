@@ -17,10 +17,19 @@ from sotrplib.sources.sources import (
 class ForcedPhotometryProvider(ABC):
     # thumbnail now attribute of MeasuredSource
     @abstractmethod
+    def force_source(
+        self,
+        input_map: ProcessableMap,
+        source: RegisteredSource,
+    ) -> MeasuredSource:
+        raise NotImplementedError
+
     def force(
-        self, input_map: ProcessableMap, sources: list[RegisteredSource]
+        self,
+        input_map: ProcessableMap,
+        sources: list[RegisteredSource],
     ) -> list[MeasuredSource]:
-        return []
+        return [self.force_source(input_map, source) for source in sources]
 
 
 class BlindSearchProvider(ABC):
