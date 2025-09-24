@@ -65,8 +65,16 @@ class Settings(BaseSettings):
     # Read json config settings to override default + environment
     @classmethod
     def from_file(cls, config_path: Path | str) -> "Settings":
-        with open(config_path, "r") as handle:
-            return cls.model_validate_json(handle.read())
+        ext = Path(config_path).suffix
+        if ext.lower() == ".json":
+            with open(config_path, "r") as handle:
+                data = handle.read()
+        elif ext.lower() == ".yaml":
+            import json
+            from yaml import safe_load
+            with open(config_path, "r") as handle:
+                data = json.dumps(safe_load(handle))
+        return cls.model_validate_json(data)
 
     def to_dependencies(self) -> dict[str, Any]:
         log = structlog.get_logger()
